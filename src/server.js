@@ -1,26 +1,37 @@
 const express = require("express");
 const bodyParser = require("body-parser");
+const jwt = require("jsonwebtoken");
 const { sendSMS } = require("./smsProvider");
 
 const app = express();
-
-// IMPORTANT: parse JSON
 app.use(bodyParser.json());
 
 app.post("/onBeforeSendSMS", async (req, res) => {
   try {
-    // 🔍 LOG RAW CDC PAYLOAD
-    console.log("========== RAW CDC PAYLOAD ==========");
+    console.log("========== RAW CDC REQUEST ==========");
     console.log(JSON.stringify(req.body, null, 2));
     console.log("=====================================");
 
-    // 🧠 Normalize payload (CDC sends multiple formats)
-    const payload =
-      req.body && req.body.data
-        ? req.body.data
-        : req.body && req.body.phoneNumber
-        ? req.body
-        : {};
+    let payload;
+
+    // ✅ CASE 1: CDC sends JWS (SIGNED PAYLOAD)
+    if (req.body.jws) {
+      const decoded = jwt.decode(req.body.jws, { complete: true });
+
+      if (!decoded || !decoded.payload) {
+        throw new Error("Unable to decode CDC JWS payload");
+      }
+
+      payload = decoded.payload;
+      console.log("========== DECODED JWS PAYLOAD ==========");
+      console.log(JSON.stringify(payload, null, 2));
+      console.log("=========================================");
+    }
+
+    // ✅ CASE 2: CDC sends plain payload (older tenants)
+    else {
+      payload = req.body.data ? req.body.data : req.body;
+    }
 
     const phoneNumber = payload.phoneNumber;
     const code = payload.code;
@@ -39,13 +50,14 @@ app.post("/onBeforeSendSMS", async (req, res) => {
     await sendSMS(phoneNumber, message);
 
     return res.status(200).json({ status: "OK" });
-  } catch (err) {
-    console.error("❌ OnBeforeSendSMS Error:", err.message);
+
+  } catch (error) {
+    console.error("❌ OnBeforeSendSMS Error:", error.message);
 
     return res.status(200).json({
       status: "FAIL",
       data: {
-        userFacingErrorMessage: "SMS handling failed"
+        userFacingErrorMessage: "SMS delivery failed"
       }
     });
   }
